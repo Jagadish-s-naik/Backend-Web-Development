@@ -20,14 +20,44 @@
 //  5. Acknowledge: res.status(200).json({ status: 'received' })
 //     Then call handleEvent(event) inside setImmediate(() => { ... })
 
+const crypto = require('node:crypto');
 const { handleEvent } = require('./eventHandlers');
-
-// TODO: implement
 
 const _processedIds = new Set();
 
 async function handleWebhook(req, res) {
-  res.status(501).json({ error: 'not implemented' });
+  const signature = req.headers['x-webhook-signature'];
+  const receivedSignature = typeof signature === 'string' && signature.startsWith('sha256=')
+    ? signature.slice('sha256='.length)
+    : null;
+
+  if (!receivedSignature || !/^[0-9a-f]{64}$/i.test(receivedSignature)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', process.env.WEBHOOK_SECRET)
+    .update(req.body)
+    .digest('hex');
+  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+  const receivedBuffer = Buffer.from(receivedSignature, 'hex');
+
+  if (!crypto.timingSafeEqual(expectedBuffer, receivedBuffer)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  const event = JSON.parse(req.body);
+
+  if (_processedIds.has(event.id)) {
+    return res.status(200).json({ status: 'already_processed' });
+  }
+
+  _processedIds.add(event.id);
+  res.status(200).json({ status: 'received' });
+
+  setImmediate(() => {
+    handleEvent(event);
+  });
 }
 
 module.exports = { handleWebhook, _processedIds };
